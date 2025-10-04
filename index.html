@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BloomWatch: Global Flowering Phenology</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- LeafletJS for Interactive Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+        #map {
+            height: 100vh;
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #888; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #555; }
+        .leaflet-popup-content-wrapper { background-color: #f9fafb; border-radius: 8px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
+        .leaflet-popup-content { margin: 12px; font-size: 14px; color: #1f2937; }
+        .leaflet-popup-tip { background: #f9fafb; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside id="sidebar" class="absolute lg:relative z-[1000] h-full lg:h-auto lg:max-h-screen w-80 lg:w-96 bg-white shadow-lg flex flex-col transition-transform duration-300 ease-in-out -translate-x-full lg:translate-x-0">
+            <div class="flex items-center justify-between p-4 border-b border-gray-200">
+                <div class="flex items-center space-x-2">
+                    <h1 class="text-xl font-bold text-gray-800">BloomWatch</h1>
+                </div>
+                <button id="close-sidebar-btn" class="lg:hidden text-gray-500 hover:text-gray-800">✖</button>
+            </div>
+
+            <div class="flex-grow p-4 overflow-y-auto custom-scrollbar">
+                <div class="mb-6">
+                    <label for="location-search" class="block text-sm font-medium text-gray-700 mb-1">Search Location</label>
+                    <input type="text" id="location-search" placeholder="e.g., California, USA" class="w-full pl-3 pr-4 py-2 border border-gray-300 rounded-md">
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+                    <div class="flex space-x-2">
+                        <input type="date" id="start-date" class="w-full p-2 border border-gray-300 rounded-md text-sm" value="2025-03-01">
+                        <input type="date" id="end-date" class="w-full p-2 border border-gray-300 rounded-md text-sm" value="2025-05-31">
+                    </div>
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Data Layer</label>
+                    <div class="space-y-2">
+                        <div class="flex items-center">
+                            <input id="layer-intensity" name="data-layer" type="radio" checked>
+                            <label for="layer-intensity" class="ml-3 block text-sm text-gray-800">Bloom Intensity</label>
+                        </div>
+                        <div class="flex items-center">
+                            <input id="layer-trend" name="data-layer" type="radio">
+                            <label for="layer-trend" class="ml-3 block text-sm text-gray-800">Phenology Trend (2000-2025)</label>
+                        </div>
+                        <div class="flex items-center">
+                            <input id="layer-prediction" name="data-layer" type="radio">
+                            <label for="layer-prediction" class="ml-3 block text-sm text-gray-800">Future Prediction (2030)</label>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="apply-filters" class="w-full bg-emerald-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-emerald-700 transition duration-300">Apply Filters</button>
+
+                <div id="loader-container" class="hidden items-center justify-center mt-4">
+                    <div class="loader"></div>
+                    <span class="ml-2 text-gray-600">Fetching data...</span>
+                </div>
+
+                <div id="legend" class="mt-6 pt-4 border-t border-gray-200">
+                    <h3 class="text-md font-semibold text-gray-800 mb-2">Legend</h3>
+                    <div id="legend-content" class="space-y-2 text-sm"></div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="flex-1 relative">
+            <div id="map"></div>
+            <button id="open-sidebar-btn" class="lg:hidden absolute top-4 left-4 z-[999] bg-white p-2 rounded-md shadow-md text-gray-700 hover:bg-gray-50">☰</button>
+        </main>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const map = L.map('map').setView([20, 0], 2);
+
+            const tileLayers = {
+                'Street': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map),
+                'Satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}')
+            };
+            L.control.layers(tileLayers).addTo(map);
+
+            let geoJsonLayer = L.geoJson().addTo(map);
+
+            const applyBtn = document.getElementById('apply-filters');
+            const loader = document.getElementById('loader-container');
+            const legendContent = document.getElementById('legend-content');
+
+            const legendConfig = {
+                intensity: { title: 'Bloom Intensity', items: [{color:'#fef0d9',label:'Low'}, {color:'#fdcc8a',label:'Moderate'}, {color:'#fc8d59',label:'High'}, {color:'#d7301f',label:'Very High'}] },
+                trend: { title: 'Phenology Trend', items: [{color:'#2b83ba',label:'Earlier Bloom'},{color:'#abdda4',label:'Stable'},{color:'#fdae61',label:'Later Bloom'}] },
+                prediction: { title: 'Future Prediction', items: [{color:'#8e0152',label:'Significant Change'},{color:'#c51b7d',label:'Moderate Change'},{color:'#de77ae',label:'Slight Change'},{color:'#7fbc41',label:'No Change'}] }
+            };
+
+            const styleFunctions = {
+                intensity: f => { const i=f.properties.intensity; return {radius:6, fillColor:i<0.25?'#fef0d9':i<0.5?'#fdcc8a':i<0.75?'#fc8d59':'#d7301f', color:"#000", weight:1, opacity:1, fillOpacity:0.8}; },
+                trend: f => { const t=f.properties.trend; return {radius:6, fillColor:t==='earlier'?'#2b83ba':t==='later'?'#fdae61':'#abdda4', color:"#000", weight:1, opacity:1, fillOpacity:0.8}; },
+                prediction: f => { const p=f.properties.prediction; return {radius:6, fillColor:p==='significant'?'#8e0152':p==='moderate'?'#c51b7d':p==='slight'?'#de77ae':'#7fbc41', color:"#000", weight:1, opacity:1, fillOpacity:0.8}; }
+            };
+
+            function getSelectedLayer() {
+                if (document.getElementById('layer-intensity').checked) return 'intensity';
+                if (document.getElementById('layer-trend').checked) return 'trend';
+                return 'prediction';
+            }
+
+            function updateLegend() {
+                const layerType = getSelectedLayer();
+                const config = legendConfig[layerType];
+                legendContent.innerHTML = config.items.map(item=>`<div class="flex items-center"><span class="h-4 w-4 rounded-full mr-2 border border-gray-400" style="background-color:${item.color}"></span>${item.label}</div>`).join('');
+            }
+
+            async function fetchMockData(lat, lon, radius) {
+                return new Promise(resolve => {
+                    setTimeout(() => {
+                        const features = [];
+                        for(let i=0;i<100+Math.random()*200;i++){
+                            features.push({ type:"Feature", geometry:{ type:"Point", coordinates:[lon-radius+Math.random()*2*radius, lat-radius+Math.random()*2*radius]}, properties:{ intensity:Math.random(), trend:['earlier','stable','later'][Math.floor(Math.random()*3)], prediction:['significant','moderate','slight','no_change'][Math.floor(Math.random()*4)], date:"2025-04-15"} });
+                        }
+                        resolve({ type:"FeatureCollection", features});
+                    },1500);
+                });
+            }
+
+            async function updateMap() {
+                loader.style.display='flex';
+                geoJsonLayer.clearLayers();
+
+                const bounds=map.getBounds();
+                const center=bounds.getCenter();
+                const radius=Math.max(Math.abs(bounds.getWest()-bounds.getEast()), Math.abs(bounds.getNorth()-bounds.getSouth()))/2;
+
+                const data=await fetchMockData(center.lat, center.lng, radius);
+                const layerType=getSelectedLayer();
+                const pointToLayer=(feature,latlng)=>L.circleMarker(latlng, styleFunctions[layerType](feature));
+                const onEachFeature=(feature,layer)=>{ let content=`<div class="font-semibold">Location Data</div>`; const props=feature.properties; if(layerType==='intensity'){content+=`<strong>Intensity:</strong> ${(props.intensity*100).toFixed(1)}%`;} else if(layerType==='trend'){content+=`<strong>Trend:</strong> <span class="capitalize">${props.trend}</span>`;} else{content+=`<strong>Prediction:</strong> <span class="capitalize">${props.prediction.replace('_',' ')}</span>`;} layer.bindPopup(content);};
+
+                geoJsonLayer.addData(data);
+                geoJsonLayer.options.pointToLayer=pointToLayer;
+                geoJsonLayer.options.onEachFeature=onEachFeature;
+                geoJsonLayer.setStyle(styleFunctions[layerType]);
+
+                loader.style.display='none';
+                updateLegend();
+            }
+
+            applyBtn.addEventListener('click', updateMap);
+            document.querySelectorAll('input[name="data-layer"]').forEach(radio=>radio.addEventListener('change', ()=>{
+                updateLegend();
+                if(geoJsonLayer.getLayers().length>0){ geoJsonLayer.setStyle(styleFunctions[getSelectedLayer()]); }
+            }));
+
+            document.getElementById('location-search').addEventListener('keypress', function(e) {
+                if(e.key==='Enter'){ updateMap(); }
+            });
+
+            const sidebar=document.getElementById('sidebar');
+            document.getElementById('open-sidebar-btn').addEventListener('click', ()=>{ sidebar.classList.remove('-translate-x-full'); });
+            document.getElementById('close-sidebar-btn').addEventListener('click', ()=>{ sidebar.classList.add('-translate-x-full'); });
+
+            updateLegend();
+            map.whenReady(()=>setTimeout(updateMap,500));
+        });
+    </script>
+</body>
+</html>
